@@ -7,8 +7,12 @@ landscape of RoBERTa**
 - Our work was motivated by the Pre-training ACL 2020 paper (https://github.com/allenai/dont-stop-pretraining)
 
 ### Organizations:
-- ``data`` contains the both the training and test dataset for the citation intent classification. It also contains our final visualized loss landscapes of three different RoBERTa models (RoBERTa-base, RoBERTa + CS DAPT, RoBERTa + NEWS DAPT)
+- ``data`` contains the both the training and test dataset for the citation intent classification. It also contains our final visualized loss landscapes of three different RoBERTa models: 
+	- RoBERTa-base
+	- RoBERTa + CS DAPT (in-domain adaptation)
+	- RoBERTa + NEWS DAPT (out-of-domain adaptation)
 - ``raw_experiment_codes`` contains three Notebook files that were actually used during our experiment and visualization.
+- ``cleaned_exp_codes.ipynb`` contains the final cleaned and annotated version of our experiment code.
 
 
 

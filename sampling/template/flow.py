@@ -25,7 +25,7 @@ class MLP(nn.Module):
       self.hid_layers.append(nn.Linear(hid_size,hid_size))
     self.out_layer = nn.Linear(hid_size,out_size)
   def forward(self,x):
-    x = self.in_layer(x)
+    x = torch.relu(self.in_layer(x))
     for i in range(len(self.hid_layers)):
       x = torch.relu(self.hid_layers[i](x))
     return self.out_layer(x)
@@ -55,13 +55,12 @@ class CouplingTransformation2D(nn.Module):
         return x, log_scale
 
 class RealNVP(nn.Module):
-    def __init__(self):
+    def __init__(self, n_paired_transforms, n_mlp_layers):
         super(RealNVP,self).__init__()
         self.transforms = nn.ModuleList()
-        self.transforms.append(CouplingTransformation2D(left=False))
-        self.transforms.append(CouplingTransformation2D(left=True))
-        self.transforms.append(CouplingTransformation2D(left=False))
-        self.transforms.append(CouplingTransformation2D(left=True))
+        for i in range(n_paired_transforms):
+            self.transforms.append(CouplingTransformation2D(left=False, num_hidden_layers=n_mlp_layers))
+            self.transforms.append(CouplingTransformation2D(left=True, num_hidden_layers=n_mlp_layers))
 
     def forward(self, x):
         z, log_det_jacobian = x, torch.zeros_like(x)
@@ -121,6 +120,8 @@ def create_two_spirals_data(n,noise=0):
 if __name__ == '__main__':
     
     data = 'spiral' #{'moon','spiral', 'labrador', 'zebra'}
+    n_paired_transforms = 2
+    n_mlp_layers = 2
     n_samples = 2000
     noise_std = 0
     epochs = 500
@@ -149,7 +150,7 @@ if __name__ == '__main__':
     sigma = torch.FloatTensor([1.])
     target_distribution = Normal(mu, sigma)
 
-    model = RealNVP()
+    model = RealNVP(n_paired_transforms, n_mlp_layers)
     optimizer = torch.optim.Adam(model.parameters(),lr=lr)
     
     train_loss = []; eval_loss = []
@@ -157,7 +158,7 @@ if __name__ == '__main__':
         train_loss = train_epoch(model,optimizer,train_loader,target_distribution)
         eval_loss = eval_epoch(model,eval_loader,target_distribution)
     
-    result_dir = f'models/{data}_samples_{n_samples}_epochs_{epochs}_lr_{lr:.0e}'
+    result_dir = f'template/models/{data}_ntransform_{n_paired_transforms}_samples_{n_samples}_epochs_{epochs}_lr_{lr:.0e}'
     os.makedirs(result_dir,exist_ok=True)
     torch.save(model.state_dict(),result_dir + '/model')
     torch.save(train_loss,result_dir + '/train_loss'); torch.save(eval_loss,result_dir + '/eval_loss')

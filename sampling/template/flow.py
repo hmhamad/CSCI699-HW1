@@ -1,8 +1,11 @@
+from telnetlib import XASCII
 from sklearn import datasets
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import numpy as np
 from jax import random
+import matplotlib
+import jax
 
 import torch
 import torch.nn as nn
@@ -11,6 +14,7 @@ from torch.distributions.normal import Normal
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import os
+from utils.density import continuous_energy_from_image, prepare_image, sample_from_image_density
 
 def loss_function(log_det_jacobian, z, target_distribution):
     log_likelihood = target_distribution.log_prob(z).sum(1) + log_det_jacobian.sum(1)
@@ -19,16 +23,16 @@ def loss_function(log_det_jacobian, z, target_distribution):
 class MLP(nn.Module):
   def __init__(self,in_size,hid_size,out_size,n_layers):
     super(MLP, self).__init__()
-    self.in_layer = nn.Linear(in_size,hid_size)
-    self.hid_layers = []
+    self.layers = nn.ModuleList()
+    self.layers.append(nn.Linear(in_size,hid_size))
     for i in range(n_layers-1):
-      self.hid_layers.append(nn.Linear(hid_size,hid_size))
-    self.out_layer = nn.Linear(hid_size,out_size)
+      self.layers.append(nn.Linear(hid_size,hid_size))
+    self.layers.append(nn.Linear(hid_size,out_size))
   def forward(self,x):
-    x = torch.relu(self.in_layer(x))
-    for i in range(len(self.hid_layers)):
-      x = torch.relu(self.hid_layers[i](x))
-    return self.out_layer(x)
+    x = self.layers[0](x)
+    for i in range(len(self.layers)-2):
+      x = torch.relu(self.layers[i+1](x))
+    return self.layers[-1](x)
 
 class CouplingTransformation2D(nn.Module):
     def __init__(self, left, hidden_size=64, num_hidden_layers=2):
@@ -83,7 +87,7 @@ def train_epoch(model,optimizer,loader,target_distribution):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        train_loss+=loss
+        train_loss+=loss.item()
     return train_loss/ len(loader) 
 
 def eval_epoch(model,loader,target_distribution):
@@ -92,8 +96,7 @@ def eval_epoch(model,loader,target_distribution):
     for b in loader:
         z, log_det_jacobian = model(b)
         loss = loss_function(log_det_jacobian,z,target_distribution)
-        eval_loss+=loss
-        loss.backward()
+        eval_loss+=loss.item()
     return eval_loss/ len(loader)
 
 class my_dataset(Dataset):
@@ -119,21 +122,29 @@ def create_two_spirals_data(n,noise=0):
 
 if __name__ == '__main__':
     
-    data = 'spiral' #{'moon','spiral', 'labrador', 'zebra'}
+    data = 'moon' #{'moon','spiral', 'labrador', 'zebra'}
     n_paired_transforms = 2
     n_mlp_layers = 2
-    n_samples = 2000
+    n_samples = int(2e3)
     noise_std = 0
-    epochs = 500
+    epochs = int(5e3)
     lr = 1e-3
 
     if data == 'spiral':
+        data+=f'{noise_std:.0e}'
         X = create_two_spirals_data(n_samples,noise=noise_std)
+        X = torch.FloatTensor(StandardScaler().fit_transform(X))
     elif data == 'moon':
         X, _ = datasets.make_moons(n_samples=n_samples,noise=noise_std)
+        X = torch.FloatTensor(StandardScaler().fit_transform(X))
+    elif data == 'zebra':
+        img = matplotlib.image.imread(f'./template/data/{data}.jpeg')
+        density, energy = prepare_image(
+            img, crop=[80, 400, 0, 500], white_cutoff=225, gauss_sigma=3, background=0.01
+        )
+        key = jax.random.PRNGKey(0)
+        X = torch.FloatTensor(np.array(sample_from_image_density(n_samples, density, key)))
     
-    # X is (n_samples x 2)
-    X = torch.FloatTensor(StandardScaler().fit_transform(X))
     rng = random.PRNGKey(0)
 
     train_size = int(0.8*X.shape[0])
@@ -150,18 +161,22 @@ if __name__ == '__main__':
     sigma = torch.FloatTensor([1.])
     target_distribution = Normal(mu, sigma)
 
-    model = RealNVP(n_paired_transforms, n_mlp_layers)
-    optimizer = torch.optim.Adam(model.parameters(),lr=lr)
-    
-    train_loss = []; eval_loss = []
-    for epoch in tqdm(range(epochs)):
-        train_loss = train_epoch(model,optimizer,train_loader,target_distribution)
-        eval_loss = eval_epoch(model,eval_loader,target_distribution)
-    
+    flow_model = RealNVP(n_paired_transforms, n_mlp_layers)
+    optimizer = torch.optim.Adam(flow_model.parameters(),lr=lr)
     result_dir = f'template/models/{data}_ntransform_{n_paired_transforms}_samples_{n_samples}_epochs_{epochs}_lr_{lr:.0e}'
-    os.makedirs(result_dir,exist_ok=True)
-    torch.save(model.state_dict(),result_dir + '/model')
-    torch.save(train_loss,result_dir + '/train_loss'); torch.save(eval_loss,result_dir + '/eval_loss')
+    
+    train_loss_list = []; eval_loss_list = []; checkpoints = [int(epochs/4),int(epochs/2),int(3*epochs/4)]
+    os.makedirs(result_dir,exist_ok=True); chkpnt = 1
+    for epoch in tqdm(range(epochs)):
+        train_loss = train_epoch(flow_model,optimizer,train_loader,target_distribution)
+        eval_loss = eval_epoch(flow_model,eval_loader,target_distribution)
+        train_loss_list.append(train_loss); eval_loss_list.append(eval_loss)
+        if epoch in checkpoints:
+            torch.save(flow_model.state_dict(),result_dir + f'/model_chkpnt_{chkpnt}')
+            chkpnt+=1
+        
+    torch.save(flow_model.state_dict(),result_dir + f'/model_chkpnt_{chkpnt}')
+    torch.save(train_loss_list,result_dir + '/train_loss'); torch.save(eval_loss_list,result_dir + '/eval_loss')
     
     
     
